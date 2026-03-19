@@ -1,0 +1,61 @@
+version: '3.8'
+
+services:
+  # --- Infrastructure: Message Broker ---
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+
+  # --- Storage: Metadata & Rules ---
+  postgres-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: validator_user
+      POSTGRES_PASSWORD: validator_password
+      POSTGRES_DB: validator_metadata
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./infra/init-db:/docker-entrypoint-initdb.d # Auto-run SQL scripts on startup
+
+  # --- Processing: Your Application ---
+  validator-app:
+    build:
+      context: ./services/validator-app
+      dockerfile: Dockerfile
+    depends_on:
+      - kafka
+      - postgres-db
+    environment:
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-db:5432/validator_metadata
+      SPRING_DATASOURCE_USERNAME: validator_user
+      SPRING_DATASOURCE_PASSWORD: validator_password
+    ports:
+      - "8080:8080"
+
+  # --- Observability: Monitoring ---
+  prometheus:
+    image: prom/prometheus:latest
+    volumes:
+      - ./infra/prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+    depends_on:
+      - validator-app
